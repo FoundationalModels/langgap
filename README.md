@@ -162,6 +162,21 @@ export MUJOCO_GL=egl
 
 ### Scripted Policy Collection
 
+To collect scripted demonstrations and save replay videos, run from the repository root:
+
+```bash
+./langgap/collect/missing_scripts/collect_and_render.sh --episodes 5
+
+# Collect every extended libero_goal task (54–57, 77–81)
+./langgap/collect/missing_scripts/collect_libero_goal.sh --episodes 5
+
+# Matched starts: 5 shared scenes, with all nine tasks per scene
+./langgap/collect/missing_scripts/collect_matched_libero_goal.sh --episodes 5
+```
+
+Runs are saved under `langgap/data/scripted_runs/`. See
+[`collect/missing_scripts/README.md`](collect/missing_scripts/README.md) for the full task list, options, and direct collector usage.
+
 ```bash
 # Single task
 python collect/scripted_collect.py \

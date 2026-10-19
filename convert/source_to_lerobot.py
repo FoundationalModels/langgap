@@ -27,6 +27,8 @@ import os
 import sys
 import argparse
 import re
+import json
+import shutil
 import h5py
 import numpy as np
 from pathlib import Path
@@ -146,12 +148,15 @@ def trim_idle_actions(states, actions, max_idle=5):
     return states[keep], actions[keep]
 
 
-def render_trajectory(env, states, actions, task_instruction, frame_skip=1):
+def render_trajectory(env, states, actions, task_instruction, frame_skip=1, initial_scene=None):
     """Render the full trajectory from states."""
     frames = []
 
-    env.reset()
-    obs = env.set_init_state(states[0])
+    if initial_scene is not None:
+        obs = initial_scene.restore(env.env, verify_images=False)
+    else:
+        env.reset()
+        obs = env.set_init_state(states[0])
 
     # Initial frame
     frame = {
@@ -180,11 +185,16 @@ def render_trajectory(env, states, actions, task_instruction, frame_skip=1):
 
 
 def process_one_hdf5(hdf5_path, bddl_path, lerobot_dataset, frame_skip=1,
-                     trim_zeros=False, max_idle=5, max_demos=None):
+                     trim_zeros=False, max_idle=5, max_demos=None,
+                     scene_lookup=None, episode_records=None):
     """Process all demos from one HDF5 file and add them to the dataset."""
     instruction = get_instruction_from_bddl(str(bddl_path))
 
     with h5py.File(hdf5_path, 'r') as f:
+        if scene_lookup is not None:
+            source_bddl = str(f['data'].attrs.get('bddl_file', ''))
+            if Path(source_bddl).name != Path(bddl_path).name:
+                raise ValueError(f'{hdf5_path}: supplied BDDL does not match the training task')
         # Fallback: try reading instruction from HDF5 if BDDL parsing fails
         if instruction == "Unknown instruction":
             instruction = f['data'].attrs.get('instruction', 'unknown task')
@@ -208,6 +218,13 @@ def process_one_hdf5(hdf5_path, bddl_path, lerobot_dataset, frame_skip=1,
             demo = f[f'data/{demo_key}']
             states = demo['states'][:]
             actions = demo['actions'][:]
+            scene = None
+            if scene_lookup is not None:
+                scene_id = str(demo.attrs.get('scene_id', ''))
+                scene = scene_lookup[scene_id]
+                if (demo.attrs.get('scene_hash') != scene.scene_hash or
+                        not np.array_equal(states[0], scene.arrays['state'])):
+                    raise ValueError(f'{demo_key}: does not match the bundled training scene')
 
             if trim_zeros:
                 orig_len = len(actions)
@@ -222,6 +239,7 @@ def process_one_hdf5(hdf5_path, bddl_path, lerobot_dataset, frame_skip=1,
                     actions=actions,
                     task_instruction=instruction,
                     frame_skip=frame_skip,
+                    initial_scene=scene,
                 )
 
                 for frame in frames:
@@ -229,8 +247,15 @@ def process_one_hdf5(hdf5_path, bddl_path, lerobot_dataset, frame_skip=1,
 
                 lerobot_dataset.save_episode()
                 success_count += 1
+                if episode_records is not None and scene is not None:
+                    episode_records.append({
+                        'episode_index': int(lerobot_dataset.meta.total_episodes) - 1,
+                        'source_demo': demo_key, 'bddl_file': Path(bddl_path).name,
+                        'scene_id': scene.scene_id, 'scene_hash': scene.scene_hash})
 
             except Exception as e:
+                if scene_lookup is not None:
+                    raise
                 tqdm.write(f"    WARNING: {demo_key} failed: {e}")
                 continue
 
@@ -256,12 +281,34 @@ def main():
                         help="Trim leading/trailing zero-action segments and compress long pauses")
     parser.add_argument("--max_idle", type=int, default=5,
                         help="Max consecutive zero-action steps to keep in the middle (default 5)")
+    parser.add_argument("--matched-scenes", type=Path,
+                        help="Bundle matched_demos.hdf5 into meta/ for restoration from Hugging Face")
     parser.add_argument("--push", action="store_true",
                         help="Push to HuggingFace after conversion")
     parser.add_argument("--private", action="store_true",
                         help="Make HuggingFace repo private")
 
     args = parser.parse_args()
+
+    scene_lookup = None
+    episode_records = None
+    if args.matched_scenes:
+        if args.trim_zeros:
+            parser.error("Matched conversion must preserve the initial frame; omit --trim_zeros")
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'eval'))
+        from matched_scenes import load_matched_scenes
+        archive_path = args.matched_scenes
+        if archive_path.is_dir():
+            archive_path = archive_path / 'matched_demos.hdf5'
+        with h5py.File(archive_path, 'r') as archive:
+            scene_count = len(archive['scenes'])
+        archive_path, scenes, matched_bddls = load_matched_scenes(archive_path, scene_count)
+        scene_lookup = {scene.scene_id: scene for scene in scenes}
+        episode_records = []
+        if args.max_demos is not None and args.max_demos != scene_count:
+            parser.error("Matched conversion must retain every scene; omit --max_demos")
+        if sorted(Path(p).name for p in args.bddl) != sorted(matched_bddls.values()):
+            parser.error("Matched conversion requires all nine task BDDLs exactly once")
 
     input_paths = [Path(p) for p in args.input]
     bddl_paths = [Path(p) for p in args.bddl]
@@ -279,6 +326,12 @@ def main():
         if not p.exists():
             print(f"Error: BDDL file not found: {p}")
             return
+
+    if scene_lookup is None:
+        for path in input_paths:
+            with h5py.File(path, 'r') as source:
+                if 'matched_task_ids' in source['data'].attrs:
+                    parser.error("Matched demos require --matched-scenes so their configurations survive conversion")
 
     print("=" * 60)
     print("Source HDF5 -> LeRobot Conversion")
@@ -300,7 +353,6 @@ def main():
     # Clean existing data (LeRobotDataset.create requires directory to not exist)
     if output_dir.exists():
         print(f"Cleaning existing data: {output_dir}")
-        import shutil
         shutil.rmtree(output_dir)
 
     # Create LeRobot dataset
@@ -327,13 +379,28 @@ def main():
             trim_zeros=args.trim_zeros,
             max_idle=args.max_idle,
             max_demos=args.max_demos,
+            scene_lookup=scene_lookup,
+            episode_records=episode_records,
         )
         total_episodes += count
         print(f"  -> {count} episodes added (cumulative: {total_episodes})")
 
+    if scene_lookup is not None:
+        expected = {(name, scene_id) for name in matched_bddls.values() for scene_id in scene_lookup}
+        actual = {(record['bddl_file'], record['scene_id']) for record in episode_records}
+        if actual != expected or len(episode_records) != len(expected):
+            raise ValueError('Converted episodes do not cover every matched scene exactly once per task')
+
     # Finalize
     print(f"\nFinalizing dataset...")
     lerobot_dataset.finalize()
+
+    if scene_lookup is not None:
+        # LeRobot uploads meta/ alongside data/videos; no collection-machine paths
+        # are required to retrieve this self-contained archive on another machine.
+        shutil.copy2(archive_path, output_dir / 'meta' / 'matched_demos.hdf5')
+        (output_dir / 'meta' / 'matched_episodes.json').write_text(
+            json.dumps({'schema_version': 1, 'episodes': episode_records}, indent=2) + '\n')
 
     print(f"\nConversion complete!")
     print(f"  Episodes: {lerobot_dataset.meta.total_episodes}")

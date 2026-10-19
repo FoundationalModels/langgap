@@ -33,7 +33,7 @@ from dataclasses import dataclass
 from typing import Optional, List, Dict
 import glob
 
-os.environ['MUJOCO_GL'] = 'egl'
+os.environ.setdefault('MUJOCO_GL', 'egl')
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
 import numpy as np
@@ -77,6 +77,7 @@ INIT_DIR = DATA_DIR / "init_files"
 
 # Extended task_id -> BDDL filename mapping (from task_registry.py)
 sys.path.insert(0, str(Path(__file__).parent.parent))
+from matched_scenes import load_matched_scenes, initialize_episode, MATCHED_GOAL_TASK_IDS
 from task_registry import get_id_to_name
 EXTENDED_TASK_ID_TO_NAME = get_id_to_name()
 
@@ -257,7 +258,7 @@ def discover_tasks(suite: str, task_type: str) -> List[TaskConfig]:
 # Environment creation
 # ============================================================================
 
-def create_env_from_bddl(bddl_path: Path, init_path: Path) -> tuple:
+def create_env_from_bddl(bddl_path: Path, init_path: Optional[Path] = None) -> tuple:
     """Create environment from BDDL and init files"""
     env = OffScreenRenderEnv(
         bddl_file_name=str(bddl_path),
@@ -266,7 +267,7 @@ def create_env_from_bddl(bddl_path: Path, init_path: Path) -> tuple:
     )
 
     # Load init states
-    if init_path.exists():
+    if init_path is not None and init_path.exists():
         init_states = torch.load(init_path, weights_only=False)
         if isinstance(init_states, dict):
             init_states = [init_states]
@@ -326,20 +327,17 @@ def run_episode(
     task_description: str,
     max_steps: int = 300,
     save_video: Optional[str] = None,
+    initial_scene=None,
+    verify_scene_images: bool = False,
 ) -> dict:
     """Run a single episode"""
 
     policy.reset()
 
-    # Reset to specified initial state
-    if init_states[init_state_id] is not None:
-        env.set_init_state(init_states[init_state_id])
-    raw_obs = env.reset()
-
-    # Wait for physics to stabilize
-    dummy_action = [0, 0, 0, 0, 0, 0, -1]
-    for _ in range(10):
-        raw_obs, _, _, _ = env.step(dummy_action)
+    for processor in (libero_pre, pol_pre, pol_post):
+        processor.reset()
+    raw_obs = initialize_episode(env, init_states, init_state_id,
+                                 initial_scene, verify_scene_images)
 
     frames = []
     total_reward = 0
@@ -449,7 +447,7 @@ def main():
     parser.add_argument("--type", type=str, default="all",
                         choices=["original", "extended", "all"],
                         help="Task type to evaluate")
-    parser.add_argument("--episodes", type=int, default=1,
+    parser.add_argument("--episodes", type=int, default=None,
                         help="Number of episodes per task (official standard is 20)")
     parser.add_argument("--max_steps", type=int, default=300,
                         help="Maximum steps per episode")
@@ -469,7 +467,41 @@ def main():
                         help="Task ID, supports: single(3), multiple(3,4,5), range(3-7), all if not specified")
     parser.add_argument("--task_name", type=str, default=None,
                         help="Only test the task with specified name (for extended tasks, e.g. ext_03_ramekin_to_cabinet)")
+    matched_source = parser.add_mutually_exclusive_group()
+    matched_source.add_argument("--matched-scenes", type=Path,
+                        help="Matched run directory or matched_demos.hdf5; evaluates every accepted scene")
+    matched_source.add_argument("--matched-dataset", type=str,
+                        help="Hugging Face dataset repo containing meta/matched_demos.hdf5")
+    parser.add_argument("--dataset-revision", type=str, default=None,
+                        help="Dataset commit or tag to download (pin the training revision)")
+    parser.add_argument("--expected-scenes", type=int, default=150,
+                        help="Required matched scene count (default: 150); use a smaller count for smoke tests")
+    parser.add_argument("--verify-scene-images", action="store_true",
+                        help="Also require identical initial pixels; physical state is always checked")
     args = parser.parse_args()
+    if args.matched_dataset:
+        from huggingface_hub import hf_hub_download
+        args.matched_scenes = Path(hf_hub_download(
+            repo_id=args.matched_dataset, repo_type="dataset",
+            filename="meta/matched_demos.hdf5", revision=args.dataset_revision))
+    matched_scenes = None
+    matched_path = None
+    if args.matched_scenes:
+        if args.suite not in ("all", "libero_goal") or args.type not in ("all", "extended"):
+            parser.error("--matched-scenes requires libero_goal extended tasks")
+        args.suite, args.type = "libero_goal", "extended"
+        try:
+            matched_path, matched_scenes, matched_bddls = load_matched_scenes(
+                args.matched_scenes, args.expected_scenes)
+        except (ValueError, KeyError, OSError) as error:
+            parser.error(str(error))
+        if args.episodes is not None and args.episodes != len(matched_scenes):
+            parser.error("Matched evaluation must run every scene; omit --episodes")
+        args.episodes = len(matched_scenes)
+    elif args.episodes is None:
+        args.episodes = 1
+    if args.episodes < 1 or args.max_steps < 1:
+        parser.error("--episodes and --max_steps must be positive")
 
     # Determine model path
     if args.finetuned:
@@ -493,6 +525,8 @@ def main():
     # If task_name is specified, keep only that task (for extended tasks)
     if args.task_name is not None:
         filtered = [t for t in all_tasks if args.task_name in t.name]
+        if not filtered and matched_scenes is not None:
+            parser.error(f"Task name not found: {args.task_name}")
         if filtered:
             all_tasks = filtered
             print(f"Filtered to task_name={args.task_name}: {len(all_tasks)} tasks")
@@ -522,6 +556,17 @@ def main():
                     else:
                         print(f"  task_id={tid} not in extended mapping (original tasks use benchmark_task_id 0-9)")
                 return
+
+    if matched_scenes is not None:
+        selected_ids = {tid for tid in MATCHED_GOAL_TASK_IDS
+                        if any(t.name == EXTENDED_TASK_ID_TO_NAME[tid] for t in all_tasks)}
+        if not all_tasks or len(selected_ids) != len(all_tasks):
+            parser.error("Selected tasks must belong to the matched libero_goal task set")
+        for tid in selected_ids:
+            task = next(t for t in all_tasks if t.name == EXTENDED_TASK_ID_TO_NAME[tid])
+            if task.bddl_path.name != matched_bddls[tid]:
+                parser.error(f"Task {tid} BDDL does not match training archive")
+        print(f"Matched archive: {matched_path}; {len(matched_scenes)} configurations per task")
 
     print(f"\nTotal tasks to evaluate: {len(all_tasks)}")
 
@@ -559,6 +604,16 @@ def main():
     print(f"Output directory: {output_dir}")
     print("=" * 70)
 
+    if matched_scenes is not None:
+        with open(output_dir / "evaluation_scenes.json", "w") as file:
+            json.dump({"matched_archive": str(matched_path),
+                       "dataset_repo": args.matched_dataset,
+                       "dataset_revision": args.dataset_revision,
+                       "scene_count": len(matched_scenes),
+                       "task_ids": sorted(selected_ids),
+                       "scenes": [{"scene_id": scene.scene_id, "scene_hash": scene.scene_hash}
+                                  for scene in matched_scenes]}, file, indent=2)
+
     # Load model
     policy, libero_pre, pol_pre, pol_post = load_policy(model_path=args.model_path)
 
@@ -580,8 +635,10 @@ def main():
                 print(f"Paraphrased: {test_instruction}")
         print("=" * 70)
 
+        env = None
         try:
-            env, init_states = create_env_from_bddl(task.bddl_path, task.init_path)
+            env, init_states = create_env_from_bddl(
+                task.bddl_path, None if matched_scenes is not None else task.init_path)
             task_results = []
 
             for ep in range(args.episodes):
@@ -594,7 +651,8 @@ def main():
                     safe_type = task.task_type.replace("/", "_")
                     video_path = str(video_dir / f"{safe_type}_{safe_name}_ep{ep}.mp4")
 
-                init_id = ep % len(init_states)
+                scene = matched_scenes[ep] if matched_scenes is not None else None
+                init_id = ep if scene is not None else ep % len(init_states)
                 print(f"  Episode {ep+1}/{args.episodes} (init_state={init_id})...", end=" ")
 
                 result = run_episode(
@@ -603,8 +661,13 @@ def main():
                     task_description=test_instruction,
                     max_steps=args.max_steps,
                     save_video=video_path,
+                    initial_scene=scene,
+                    verify_scene_images=args.verify_scene_images,
                 )
 
+                if scene is not None:
+                    result.update(scene_id=scene.scene_id, scene_hash=scene.scene_hash,
+                                  matched_archive=str(matched_path))
                 result["episode"] = ep
                 result["init_state_id"] = init_id
                 if video_path:
@@ -613,8 +676,6 @@ def main():
 
                 status = "SUCCESS" if result["success"] else "FAIL"
                 print(f"[{status}] steps={result['steps']}")
-
-            env.close()
 
             # Statistics
             successes = sum(1 for r in task_results if r["success"])
@@ -649,6 +710,10 @@ def main():
                 "error": str(e),
             }
 
+        finally:
+            if env is not None:
+                env.close()
+
     # Save results
     result_file = output_dir / "results.json"
     with open(result_file, 'w') as f:
@@ -657,6 +722,8 @@ def main():
 
     # Generate summary
     generate_summary(all_results, output_dir, suites, args)
+    if matched_scenes is not None and any("error" in result for result in all_results.values()):
+        raise SystemExit("Matched evaluation incomplete; see task errors in results.json")
 
 
 def generate_summary(all_results: Dict, output_dir: Path, suites: List[str], args):

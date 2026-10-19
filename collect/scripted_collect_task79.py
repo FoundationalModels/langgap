@@ -176,7 +176,7 @@ def build_waypoints(object_pos, plate_pos, table_height,
         # 1. Move above cream cheese center + rotate gripper (gripper open)
         (make_pose(np.array([grasp_x, grasp_y, grasp_z + 0.10]), GRASP_ROT), -1, 0.01, 0),
         # 2. Descend to grasp position (gripper open, tight threshold)
-        (make_pose(np.array([grasp_x, grasp_y, grasp_z]), GRASP_ROT), -1, 0.005, 0),
+        (make_pose(np.array([grasp_x, grasp_y, grasp_z]), GRASP_ROT), -1, 0.002, 0),
         # 3. Close gripper (extra hold)
         (make_pose(np.array([grasp_x, grasp_y, grasp_z]), GRASP_ROT), +1, 999, 10),
         # 4. Lift up high (gripper closed) — higher to avoid overshooting during carry
@@ -188,23 +188,29 @@ def build_waypoints(object_pos, plate_pos, table_height,
         # 7. Open gripper (release, hold 5 steps)
         (make_pose(np.array([place_x, place_y, pz + place_offset]), GRASP_ROT), -1, 999, 5),
     ]
+    retreat = waypoints[-1][0].copy()
+    retreat[2, 3] += 0.14
+    waypoints.extend([(retreat, -1, 0.01, 0), (retreat, -1, 999, 15)])
     return waypoints
 
 
 def collect_one_demo(env, cheese_body, plate_body, max_steps, debug=False,
-                     place_offset=0.02):
+                     place_offset=0.02, initialize_scene=None):
     """Collect a single demo using scripted waypoints. Returns (states, actions, success)."""
-    obs = env.reset()
-
-    states = []
-    actions = []
-
-    # Let physics settle (objects may be spawned slightly above surfaces)
-    # Do NOT record settling steps — they cause visible pauses in playback
-    settle_action = np.zeros(7)
-    settle_action[6] = -1.0  # gripper open during settling
-    for _ in range(10):
-        obs, _, _, _ = env.step(settle_action)
+    if initialize_scene is None:
+        obs = env.reset()
+    
+    
+        # Let physics settle (objects may be spawned slightly above surfaces)
+        # Do NOT record settling steps — they cause visible pauses in playback
+        settle_action = np.zeros(7)
+        settle_action[6] = -1.0  # gripper open during settling
+        for _ in range(10):
+            obs, _, _, _ = env.step(settle_action)
+    else:
+        # The matched runner restores a settled, verified scene here.
+        obs = initialize_scene(env)
+    states, actions = [], []
 
     # Get current object positions after settling
     object_pos = get_body_pos(env, cheese_body)
@@ -291,16 +297,25 @@ def collect_one_demo(env, cheese_body, plate_body, max_steps, debug=False,
     assert len(states) == len(actions), \
         f"states ({len(states)}) != actions ({len(actions)})"
 
-    success = env._check_success()
+    final_pos = get_body_pos(env, cheese_body)
+    inside = np.linalg.norm(final_pos[:2] - plate_pos[:2]) < 0.07
+    surface_z = plate_pos[2]
+    table_z = get_site_pos(env, "table_top")[2]
+    resting = abs(final_pos[2] - (surface_z + object_pos[2] - table_z)) < 0.018
+    contact = env.check_contact(env.get_object("plate_1"), env.get_object("cream_cheese_1"))
+    success = bool(env._check_success() and inside and resting and contact
+                   and total_steps < max_steps)
     if debug:
         print(f"  Total steps: {total_steps}, Success: {success}")
 
     return states, actions, success
 
 
-def save_hdf5(demos, output_path, env_info, bddl_path, instruction):
+def save_hdf5(demos, output_path, env_info, bddl_path, instruction,
+              model_poses=None, model_body_names=None):
     """Save collected demos to HDF5 format."""
-    with h5py.File(output_path, "w") as f:
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    with h5py.File(output_path, "x") as f:
         grp = f.create_group("data")
 
         for i, (states, actions) in enumerate(demos):
@@ -308,6 +323,9 @@ def save_hdf5(demos, output_path, env_info, bddl_path, instruction):
             ep_grp.create_dataset("states", data=np.array(states))
             ep_grp.create_dataset("actions", data=np.array(actions))
             ep_grp.attrs["num_samples"] = len(actions)
+            if model_poses is not None:
+                ep_grp.create_dataset("model_body_pos", data=model_poses[i][0])
+                ep_grp.create_dataset("model_body_quat", data=model_poses[i][1])
 
         now = datetime.now()
         grp.attrs["date"] = f"{now.month}-{now.day}-{now.year}"
@@ -315,16 +333,18 @@ def save_hdf5(demos, output_path, env_info, bddl_path, instruction):
         grp.attrs["repository_version"] = suite.__version__
         grp.attrs["env"] = "Libero_Tabletop_Manipulation"
         grp.attrs["env_info"] = env_info
+        if model_body_names is not None:
+            grp.attrs["model_body_names"] = json.dumps(model_body_names)
         grp.attrs["bddl_file"] = bddl_path
         grp.attrs["instruction"] = instruction
         grp.attrs["total"] = len(demos)
 
 
-EXPECTED_MAX_STEPS = 95  # Calibrated: max=86, ceil/5×5+5=95
+EXPECTED_MAX_STEPS = 240  # Includes release, retreat, and physical placement checks.
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Scripted waypoint demo collection (Task 64: cream cheese → plate)")
+        description="Scripted waypoint demo collection (Task 79: cream cheese → plate)")
     parser.add_argument("--bddl", type=str, required=True,
                         help="BDDL file path")
     parser.add_argument("--num", type=int, default=200,
@@ -393,6 +413,8 @@ def main():
 
     # Collect demos
     demos = []
+    model_poses = []
+    model_body_names = [env.sim.model.body_id2name(i) for i in range(env.sim.model.nbody)]
     successes = 0
     failures = 0
 
@@ -408,6 +430,8 @@ def main():
         if success:
             if len(actions) <= EXPECTED_MAX_STEPS:
                 demos.append((states, actions))
+                # Fixture poses are model parameters, absent from flattened states.
+                model_poses.append((env.sim.model.body_pos.copy(), env.sim.model.body_quat.copy()))
                 successes += 1
                 print(f"  SUCCESS ({len(actions)} steps) "
                       f"[{successes}/{i + 1} successful]")
@@ -450,7 +474,8 @@ def main():
         }
     })
 
-    save_hdf5(demos, output_path, env_info, bddl_path, instruction)
+    save_hdf5(demos, output_path, env_info, bddl_path, instruction,
+              model_poses=model_poses, model_body_names=model_body_names)
     print(f"Saved {len(demos)} demos to: {output_path}")
 
 

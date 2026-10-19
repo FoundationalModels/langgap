@@ -31,6 +31,7 @@ Usage:
 """
 
 import argparse
+import json
 from pathlib import Path
 
 import imageio
@@ -55,16 +56,31 @@ def create_env(bddl_path):
     return env
 
 
-def replay_episode(env, actions, frame_skip=2, init_state=None):
+def replay_episode(env, actions, frame_skip=2, init_state=None, model_state=None):
     """Replay actions through env.step() and collect agentview frames.
 
     Args:
         env: LIBERO OffScreenRenderEnv instance.
         actions: Array of actions to replay (10Hz from converted dataset).
         frame_skip: Sim steps per dataset action (default 2, 10Hz -> 20Hz env).
-        init_state: Optional 92-dim MuJoCo state to restore initial conditions.
+        init_state: Optional flattened MuJoCo state to restore initial conditions.
+        model_state: Optional (body positions, body quaternions, ordered body names)
+            restoring sampled fixture poses. Older datasets omit this metadata.
     """
     obs = env.reset()
+    if model_state is not None:
+        # Fixture randomization changes compiled model arrays, not qpos/qvel.
+        positions, quaternions, body_names = model_state
+        if body_names is not None:
+            actual_names = [env.sim.model.body_id2name(i) for i in range(env.sim.model.nbody)]
+            if actual_names != body_names:
+                raise ValueError("Recorded model body layout does not match replay environment")
+        if (positions.shape != env.sim.model.body_pos.shape or
+                quaternions.shape != env.sim.model.body_quat.shape):
+            raise ValueError("Recorded model body poses do not match replay environment")
+        env.sim.model.body_pos[:] = positions
+        env.sim.model.body_quat[:] = quaternions
+        env.sim.forward()
     if init_state is not None:
         obs = env.set_init_state(init_state)
         # Reset controller state to match the restored MuJoCo state
@@ -132,10 +148,18 @@ def main():
             demo_keys = sorted([k for k in f['data'].keys() if k.startswith('demo')])
             episodes = []
             hdf5_init_states = []
+            hdf5_model_states = []
+            body_names = (json.loads(f['data'].attrs['model_body_names'])
+                          if 'model_body_names' in f['data'].attrs else None)
             for dk in demo_keys:
                 actions = f[f'data/{dk}/actions'][:]
                 episodes.append({'actions': actions})
                 hdf5_init_states.append(f[f'data/{dk}/states'][0])
+                ep = f[f'data/{dk}']
+                model_state = None
+                if 'model_body_pos' in ep and 'model_body_quat' in ep:
+                    model_state = (ep['model_body_pos'][:], ep['model_body_quat'][:], body_names)
+                hdf5_model_states.append(model_state)
         n_total = len(episodes)
         n_replay = min(args.episodes, n_total)
         print(f"Loading HDF5: {hdf5_path}")
@@ -182,7 +206,8 @@ def main():
         actions = ep["actions"]
         init_state = hdf5_init_states[i] if hdf5_init_states else None
         print(f"  Replaying episode {i} ({len(actions)} actions)...")
-        frames, success = replay_episode(env, actions, args.frame_skip, init_state)
+        frames, success = replay_episode(env, actions, args.frame_skip, init_state,
+                                         hdf5_model_states[i] if input_is_hdf5 else None)
         results.append(success)
 
         video_path = output_dir / f"episode_{i:03d}.mp4"

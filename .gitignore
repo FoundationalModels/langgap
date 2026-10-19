@@ -68,6 +68,7 @@ alfred_src/alfred/data/full_2.1.0/
 
 # Output files from scripts
 *.log
+data/scripted_runs/
 
 # Server config (sensitive)
 .server_config
