@@ -61,6 +61,43 @@ Reusing its bank reproduced bit-identical state/action recordings for all nine
 tasks. An injected policy failure produced no partial task exports and left the
 source bank unchanged.
 
+## Collect 150 matched scenes on Slurm
+
+Set up the root `.venv-langgap` on the cluster with `./setup_env.sh langgap`
+before submitting. From the repository root:
+
+```bash
+sbatch langgap/collect/collect_matched_libero_goal.sbatch
+```
+
+This submits one serial matched collector: **150 shared configurations × nine
+tasks = 150 demos per task**. It allows 600 candidate scenes by default, requests
+four CPUs, 16 GB RAM and 24 hours, and uses CPU OSMesa rendering. Initial physical
+state and reference image checks remain enabled. The compute node needs OSMesa;
+load your cluster's Mesa module if required. Add your cluster's account,
+partition or time limit as `sbatch` options. For GPU EGL rendering, use:
+
+```bash
+MUJOCO_GL=egl sbatch --partition=gpu --gres=gpu:1 \
+  langgap/collect/collect_matched_libero_goal.sbatch
+```
+
+Choose a shared/scratch output directory and a larger candidate budget with:
+
+```bash
+MATCHED_OUTPUT_DIR=/scratch/$USER/matched_goal_150 MATCHED_MAX_SCENES=900 \
+  sbatch langgap/collect/collect_matched_libero_goal.sbatch
+```
+
+The output directory must not exist. By default it is
+`langgap/data/scripted_runs/matched_libero_goal/<UTC timestamp>_<job ID>/`.
+Slurm writes `matched-libero-goal-<job ID>.out` and `.err` in the submission
+working directory. The job uses the existing root environment and does not install
+packages. Submit from inside the checkout, or set `MATCHED_PROJECT_ROOT` to its
+absolute cluster path. Add `--videos` after the script path to also render demo
+videos; this needs additional runtime and storage. The job exits nonzero if it
+cannot collect all 150 accepted scenes within the candidate budget.
+
 ## Evaluate all 150 training configurations
 
 Collect 150 accepted scenes with `collect_matched_libero_goal.sh --episodes 150`.
