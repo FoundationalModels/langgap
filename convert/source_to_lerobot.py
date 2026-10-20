@@ -158,10 +158,13 @@ def render_trajectory(env, states, actions, task_instruction, frame_skip=1, init
         env.reset()
         obs = env.set_init_state(states[0])
 
+    # Match HF LIBERO / OpenPI training orientation: rotate raw camera arrays
+    # 180 degrees. A vertical-only display flip leaves training mirrored in eval.
+    # Stored dataset frames must not receive LiberoProcessorStep a second time.
     # Initial frame
     frame = {
-        "observation.images.image": obs["agentview_image"][::-1].copy(),
-        "observation.images.image2": obs["robot0_eye_in_hand_image"][::-1].copy(),
+        "observation.images.image": obs["agentview_image"][::-1, ::-1].copy(),
+        "observation.images.image2": obs["robot0_eye_in_hand_image"][::-1, ::-1].copy(),
         "observation.state": get_observation_state(obs),
         "action": actions[0].astype(np.float32),
         "task": task_instruction,
@@ -173,8 +176,8 @@ def render_trajectory(env, states, actions, task_instruction, frame_skip=1, init
         if i % frame_skip == 0:
             obs = env.set_init_state(states[i])
             frame = {
-                "observation.images.image": obs["agentview_image"][::-1].copy(),
-                "observation.images.image2": obs["robot0_eye_in_hand_image"][::-1].copy(),
+                "observation.images.image": obs["agentview_image"][::-1, ::-1].copy(),
+                "observation.images.image2": obs["robot0_eye_in_hand_image"][::-1, ::-1].copy(),
                 "observation.state": get_observation_state(obs),
                 "action": actions[i].astype(np.float32),
                 "task": task_instruction,

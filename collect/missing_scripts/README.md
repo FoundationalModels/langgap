@@ -72,7 +72,7 @@ sbatch langgap/collect/collect_matched_libero_goal.sbatch
 
 This submits one serial matched collector: **150 shared configurations × nine
 tasks = 150 demos per task**. It allows 600 candidate scenes by default, requests
-four CPUs, 16 GB RAM and 24 hours, and uses CPU OSMesa rendering. Initial physical
+four CPUs, 16 GB RAM and 48 hours, and uses CPU OSMesa rendering. Initial physical
 state and reference image checks remain enabled. The compute node needs OSMesa;
 load your cluster's Mesa module if required. Add your cluster's account,
 partition or time limit as `sbatch` options. For GPU EGL rendering, use:
@@ -94,9 +94,40 @@ The output directory must not exist. By default it is
 Slurm writes `matched-libero-goal-<job ID>.out` and `.err` in the submission
 working directory. The job uses the existing root environment and does not install
 packages. Submit from inside the checkout, or set `MATCHED_PROJECT_ROOT` to its
-absolute cluster path. Add `--videos` after the script path to also render demo
-videos; this needs additional runtime and storage. The job exits nonzero if it
-cannot collect all 150 accepted scenes within the candidate budget.
+absolute cluster path.
+
+After successful collection, the same job automatically converts all nine task
+files into a **training-ready LeRobot dataset** at `<run directory>/lerobot/`.
+It renders agent-view and wrist-camera images at every recorded timestep
+(`frame_skip=1`), rotated 180 degrees from the raw simulator arrays to match
+original HF LIBERO training images. The videos, robot observations, actions and
+instructions are packaged together. Collection and rendering run sequentially;
+images are generated during this automatic conversion stage.
+
+The dataset includes `meta/matched_demos.hdf5`, `meta/matched_episodes.json` and
+`meta/image_convention.json` for restoring and identifying the same 150 scenes
+at evaluation time. The job verifies 1,350 nonempty episodes and that every task
+contains each scene exactly once, including the scene hashes. It also checks
+that both training camera videos exist. It exits nonzero on collection or
+conversion failure.
+
+Set `MATCHED_REPO_ID=YOUR_ORG/YOUR_DATASET` when submitting to choose the identity
+recorded in dataset metadata; the default is `local/libero_goal_matched_150`.
+The batch job does not upload to Hugging Face. Add `--videos` after the script
+path only if you also want standalone replay videos; the two training camera
+videos are always generated automatically. `--episodes` and `--output-dir`
+cannot be overridden as collector arguments in this fixed 150-scene batch job.
+
+If collection has already succeeded, conversion can also be run independently:
+
+```bash
+source activate_env.sh langgap
+python langgap/convert/convert_matched_libero_goal.py \
+  --run-dir /path/to/completed/collection \
+  --repo-id YOUR_ORG/YOUR_DATASET
+```
+
+The helper refuses to overwrite an existing `lerobot/` dataset.
 
 ## Evaluate all 150 training configurations
 
@@ -135,6 +166,15 @@ robot configuration and assets. Exact physical model/state checks always run;
 add `--verify-scene-images` to require pixel equality too. Different rendering
 hardware can change pixels, and matching the initial state does not guarantee
 identical subsequent physics across different machines.
+
+## Camera orientation for fine-tuning
+
+The converter stores both cameras rotated 180 degrees from raw simulator arrays,
+matching original HF LIBERO images and the evaluation environment processor.
+Fine-tuning then resizes/normalizes stored images without adding another flip.
+Earlier vertical-only converted extended videos need regeneration from HDF5.
+See [the image-convention audit](../../convert/IMAGE_CONVENTIONS.md) for the
+OpenPI/LeRobot source trace and regression checks.
 
 ## Restore from the Hugging Face training dataset only
 
