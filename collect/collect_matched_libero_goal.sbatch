@@ -4,22 +4,27 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
-#SBATCH --time=48:00:00
+#SBATCH --time=36:00:00
+#SBATCH --partition=gpu
+#SBATCH --gres=gpu:1
 #SBATCH --output=matched-libero-goal-%j.out
 #SBATCH --error=matched-libero-goal-%j.err
 
 # Submit from the checkout root (or a directory inside it):
 #   sbatch langgap/collect/collect_matched_libero_goal.sbatch
-# Add your cluster's account / CPU partition on the sbatch command line.
+# Tufts HPC: no OSMesa on the nodes, so this job runs on the gpu partition with EGL.
 # Optional environment overrides:
 #   MATCHED_PROJECT_ROOT=/shared/path/VLA-Embd-Analysis
 #   MATCHED_OUTPUT_DIR=/scratch/$USER/matched_goal_150  # must not exist
 #   MATCHED_MAX_SCENES=600  MATCHED_SEED=0
-#   MATCHED_REPO_ID=YOUR_ORG/libero_goal_matched_150  # metadata only; no upload
+#   MATCHED_REPO_ID=helenlu94/libero_goal_matched_150  # HF dataset repo; uploaded (private) at the end
+#   MATCHED_UPLOAD=0  # skip the Hugging Face upload
+#   MATCHED_VERIFY_IMAGES=1  # also require pixel-identical restored initial images
+# Pixel checks are off by default: EGL GPU renders of an exactly restored state are
+# not bit-identical (OSMesa's were), which aborted the job. Exact state checks remain.
 # Collects 150 matched scenes, then renders/packages both training cameras.
 # Extra collector arguments follow the script path, e.g. --random-init.
 # --videos additionally creates standalone replay videos (separate from training).
-# For GPU rendering: MUJOCO_GL=egl sbatch --partition=gpu --gres=gpu:1 ...
 set -euo pipefail
 
 # Slurm executes a spool copy, so BASH_SOURCE alone cannot locate the checkout.
@@ -51,10 +56,11 @@ for matched_argument in "$@"; do
     esac
 done
 
-# CPU rendering needs OSMesa on the compute node; EGL is available as an override.
+# EGL rendering on the allocated GPU (OSMesa is not installed on this cluster).
 # Keep BLAS single-threaded: this job runs one serial matched collector, not nine
 # independent collectors, so all tasks receive exactly the same accepted scenes.
-export MUJOCO_GL="${MUJOCO_GL:-osmesa}"
+export MUJOCO_GL="${MUJOCO_GL:-egl}"
+if [[ "$MUJOCO_GL" == egl ]]; then export PYOPENGL_PLATFORM=egl; fi
 export NUMBA_DISABLE_JIT="${NUMBA_DISABLE_JIT:-1}"
 export OPENBLAS_NUM_THREADS=1
 export MKL_NUM_THREADS=1
@@ -94,7 +100,10 @@ printf 'Requesting 150 shared scenes across tasks 54,55,56,57,77,78,79,80,81 (15
 
 # The existing launcher activates the root .venv-langgap. Collection exits nonzero
 # if the candidate budget cannot produce 150 complete nine-task bundles.
+matched_verify_flag=--no-verify-images
+if [[ "${MATCHED_VERIFY_IMAGES:-0}" == 1 ]]; then matched_verify_flag=; fi
 bash "$matched_launcher" \
+    $matched_verify_flag \
     --episodes 150 \
     --max-scenes "${MATCHED_MAX_SCENES:-600}" \
     --seed "${MATCHED_SEED:-0}" \
@@ -105,6 +114,26 @@ bash "$matched_launcher" \
 printf '\nCollection succeeded. Rendering every timestep from both cameras in HF LIBERO orientation.\n'
 "$matched_python" -u "$matched_converter" \
     --run-dir "$matched_output" \
-    --repo-id "${MATCHED_REPO_ID:-local/libero_goal_matched_150}" \
+    --repo-id "${MATCHED_REPO_ID:-helenlu94/libero_goal_matched_150}" \
     --expected-scenes 150
 printf '\nTraining dataset ready: %s/lerobot\n' "$matched_output"
+
+if [[ "${MATCHED_UPLOAD:-1}" == 1 ]]; then
+    matched_repo="${MATCHED_REPO_ID:-helenlu94/libero_goal_matched_150}"
+    printf '\nUploading %s/lerobot to private HF dataset %s\n' "$matched_output" "$matched_repo"
+    "$matched_python" -I - "$matched_output/lerobot" "$matched_repo" <<'PY'
+import sys
+from huggingface_hub import HfApi
+folder, repo = sys.argv[1:3]
+api = HfApi()
+api.create_repo(repo, repo_type='dataset', private=True, exist_ok=True)
+api.upload_folder(folder_path=folder, repo_id=repo, repo_type='dataset',
+                  commit_message='Matched LIBERO-goal extended demos: 150 scenes x 9 tasks')
+info = api.dataset_info(repo)
+files = {s.rfilename for s in info.siblings}
+assert info.private, 'repo must be private'
+for required in ('meta/info.json', 'meta/matched_demos.hdf5', 'meta/matched_episodes.json'):
+    assert required in files, f'missing {required}'
+print(f'Uploaded {len(files)} files to {repo} (private={info.private}) at {info.sha}')
+PY
+fi

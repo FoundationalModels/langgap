@@ -113,7 +113,7 @@ conversion failure.
 
 Set `MATCHED_REPO_ID=YOUR_ORG/YOUR_DATASET` when submitting to choose the identity
 recorded in dataset metadata; the default is `local/libero_goal_matched_150`.
-The batch job does not upload to Hugging Face. Add `--videos` after the script
+The batch job uploads the `lerobot/` dataset to the private HF repo `MATCHED_REPO_ID` (default `helenlu94/libero_goal_matched_150`) unless `MATCHED_UPLOAD=0`. Add `--videos` after the script
 path only if you also want standalone replay videos; the two training camera
 videos are always generated automatically. `--episodes` and `--output-dir`
 cannot be overridden as collector arguments in this fixed 150-scene batch job.
