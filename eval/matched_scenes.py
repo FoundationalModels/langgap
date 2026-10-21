@@ -1,4 +1,5 @@
 """Load accepted training scenes for exhaustive matched-scene evaluation."""
+import json
 from pathlib import Path
 import sys
 
@@ -26,6 +27,7 @@ def load_matched_scenes(path, expected_count=150, task_ids=MATCHED_GOAL_TASK_IDS
     with h5py.File(path, 'r') as archive:
         if archive.attrs.get('schema_version') != 1 or 'scenes' not in archive:
             raise ValueError('Expected a version-1 matched_demos.hdf5 archive')
+        archive_task_ids = tuple(json.loads(archive.attrs['task_ids'])) if 'task_ids' in archive.attrs else MATCHED_GOAL_TASK_IDS
         for key in sorted(archive['scenes']):
             group = archive['scenes'][key]
             if not group.attrs.get('complete', False):
@@ -34,7 +36,7 @@ def load_matched_scenes(path, expected_count=150, task_ids=MATCHED_GOAL_TASK_IDS
             if scene.scene_id != key:
                 raise ValueError(f'Scene ID does not match archive key: {key}')
             # Validate every training task, even when evaluating a task subset.
-            for task_id in MATCHED_GOAL_TASK_IDS:
+            for task_id in archive_task_ids:
                 episode = group[f'tasks/{task_id}']
                 if (episode.attrs['scene_id'] != scene.scene_id or
                         episode.attrs['scene_hash'] != scene.scene_hash or

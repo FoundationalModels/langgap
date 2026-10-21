@@ -64,6 +64,18 @@ LIBERO_FEATURES = {
     },
 }
 
+STANDARD_KEY_MAP = {
+    'observation.images.image': 'image',
+    'observation.images.image2': 'wrist_image',
+    'observation.state': 'state',
+    'action': 'actions',
+}
+STANDARD_LIBERO_FEATURES = {
+    STANDARD_KEY_MAP[key]: dict(feature, dtype='image' if feature['dtype'] == 'video' else feature['dtype'],
+                               names=feature['names'] if feature['dtype'] == 'video' else [STANDARD_KEY_MAP[key]])
+    for key, feature in LIBERO_FEATURES.items()
+}
+
 LIBERO_FPS = 10
 LIBERO_ROBOT_TYPE = "panda"
 
@@ -88,7 +100,7 @@ def get_instruction_from_bddl(bddl_path: str) -> str:
         content = f.read()
     match = re.search(r"\(:language ([^)]+)\)", content)
     if match:
-        return match.group(1).strip()
+        return match.group(1).strip().lower()
     return "Unknown instruction"
 
 
@@ -189,7 +201,7 @@ def render_trajectory(env, states, actions, task_instruction, frame_skip=1, init
 
 def process_one_hdf5(hdf5_path, bddl_path, lerobot_dataset, frame_skip=1,
                      trim_zeros=False, max_idle=5, max_demos=None,
-                     scene_lookup=None, episode_records=None):
+                     scene_lookup=None, episode_records=None, standard_libero=False):
     """Process all demos from one HDF5 file and add them to the dataset."""
     instruction = get_instruction_from_bddl(str(bddl_path))
 
@@ -198,9 +210,10 @@ def process_one_hdf5(hdf5_path, bddl_path, lerobot_dataset, frame_skip=1,
             source_bddl = str(f['data'].attrs.get('bddl_file', ''))
             if Path(source_bddl).name != Path(bddl_path).name:
                 raise ValueError(f'{hdf5_path}: supplied BDDL does not match the training task')
-        # Fallback: try reading instruction from HDF5 if BDDL parsing fails
-        if instruction == "Unknown instruction":
-            instruction = f['data'].attrs.get('instruction', 'unknown task')
+        # The collector's JSON-derived instruction is authoritative for matched demos.
+        instruction = str(f['data'].attrs.get('instruction', instruction)).lower()
+        if instruction == 'unknown instruction':
+            instruction = 'unknown task'
         demo_keys = sorted([k for k in f['data'].keys() if k.startswith('demo')])
         total_demos = len(demo_keys)
 
@@ -246,6 +259,8 @@ def process_one_hdf5(hdf5_path, bddl_path, lerobot_dataset, frame_skip=1,
                 )
 
                 for frame in frames:
+                    if standard_libero:
+                        frame = {STANDARD_KEY_MAP.get(key, key): value for key, value in frame.items()}
                     lerobot_dataset.add_frame(frame)
 
                 lerobot_dataset.save_episode()
@@ -286,6 +301,8 @@ def main():
                         help="Max consecutive zero-action steps to keep in the middle (default 5)")
     parser.add_argument("--matched-scenes", type=Path,
                         help="Bundle matched_demos.hdf5 into meta/ for restoration from Hugging Face")
+    parser.add_argument("--standard-libero", action="store_true",
+                        help="Use OpenPI LIBERO columns (image, wrist_image, state, actions) and embedded images")
     parser.add_argument("--push", action="store_true",
                         help="Push to HuggingFace after conversion")
     parser.add_argument("--private", action="store_true",
@@ -311,7 +328,7 @@ def main():
         if args.max_demos is not None and args.max_demos != scene_count:
             parser.error("Matched conversion must retain every scene; omit --max_demos")
         if sorted(Path(p).name for p in args.bddl) != sorted(matched_bddls.values()):
-            parser.error("Matched conversion requires all nine task BDDLs exactly once")
+            parser.error("Matched conversion requires all archived task BDDLs exactly once")
 
     input_paths = [Path(p) for p in args.input]
     bddl_paths = [Path(p) for p in args.bddl]
@@ -363,10 +380,10 @@ def main():
     lerobot_dataset = LeRobotDataset.create(
         repo_id=args.repo_id,
         fps=LIBERO_FPS,
-        features=LIBERO_FEATURES,
+        features=STANDARD_LIBERO_FEATURES if args.standard_libero else LIBERO_FEATURES,
         robot_type=LIBERO_ROBOT_TYPE,
         root=output_dir,
-        use_videos=True,
+        use_videos=not args.standard_libero,
     )
 
     # Process each HDF5 file
@@ -384,6 +401,7 @@ def main():
             max_demos=args.max_demos,
             scene_lookup=scene_lookup,
             episode_records=episode_records,
+            standard_libero=args.standard_libero,
         )
         total_episodes += count
         print(f"  -> {count} episodes added (cumulative: {total_episodes})")

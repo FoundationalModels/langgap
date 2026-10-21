@@ -198,7 +198,11 @@ them. Exact physical state checks always run. The default uses task 54's
 init bank; `--random-init` samples the common BDDL scene instead.
 
 Outputs include `scene_bank.hdf5`, `matched_demos.hdf5`, `task<ID>.hdf5`,
-`manifest.json`, and a resolved `targets.json`. Instructions are lowercased.
+`manifest.json`, and a resolved `targets.json`. The batch job then exports
+`lerobot/` with standard LIBERO columns (`image`, `wrist_image`, `state`, `actions`)
+and embedded images, and prepares `lerobot-openpi-v21/` using `.venv-openpi`.
+The final dataset uses OpenPI's standard LIBERO data config. Both root Python
+environments must be installed. Instructions are lowercased.
 The JSON base commands and both pick/place variant groups are preserved as metadata; variants reuse the same
 physical behavior rather than triggering additional rollouts. Use `--scene-bank
 /path/to/scene_bank.hdf5` to reuse existing configurations, `--videos` for replay

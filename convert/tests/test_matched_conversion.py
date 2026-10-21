@@ -18,6 +18,7 @@ class MatchedConversionTest(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.scenes = [SimpleNamespace(scene_id=f'scene_{i:06d}', scene_hash=f'hash{i}')
                        for i in range(150)]
+        self.task_ids = job.MATCHED_GOAL_TASK_IDS
         self.names = {task: job.EXTENDED_TASK_MAP[task]['bddl'] + '.bddl'
                       for task in job.MATCHED_GOAL_TASK_IDS}
         for task in job.MATCHED_GOAL_TASK_IDS:
@@ -35,16 +36,17 @@ class MatchedConversionTest(unittest.TestCase):
         self.assertEqual(command[command.index('--frame_skip') + 1], '1')
         self.assertNotIn('--trim_zeros', command)
         inputs = command[command.index('--input') + 1:command.index('--bddl')]
-        self.assertEqual(len(inputs), 9)
+        self.assertEqual(len(inputs), len(self.task_ids))
         out = self.root / 'lerobot'
         (out / 'meta').mkdir(parents=True)
-        cameras = ('observation.images.image', 'observation.images.image2')
+        standard = '--standard-libero' in command
+        cameras = ('image', 'wrist_image') if standard else ('observation.images.image', 'observation.images.image2')
         (out / 'meta/info.json').write_text(json.dumps({
-            'total_episodes': 1350, 'total_frames': 2700,
-            'features': {key: {'dtype': 'video', 'shape': [256, 256, 3]} for key in cameras}}))
+            'total_episodes': 150 * len(self.task_ids), 'total_frames': 300 * len(self.task_ids),
+            'features': {key: {'dtype': 'image' if standard else 'video', 'shape': [256, 256, 3]} for key in cameras}}))
         records = [{'bddl_file': self.names[task], 'scene_id': scene.scene_id,
                     'scene_hash': scene.scene_hash}
-                   for task in job.MATCHED_GOAL_TASK_IDS for scene in self.scenes]
+                   for task in self.task_ids for scene in self.scenes]
         if self.corrupt_pairing:
             records[-1] = records[-2].copy()  # Keep the count, lose a configuration.
         (out / 'meta/matched_episodes.json').write_text(json.dumps({'episodes': records}))
@@ -62,6 +64,26 @@ class MatchedConversionTest(unittest.TestCase):
         metadata = json.loads((output / 'meta/image_convention.json').read_text())
         self.assertEqual(metadata['raw_simulator_to_dataset'], 'rotate_180')
         self.assertEqual(metadata['episodes_per_task'], 150)
+
+    def test_eleven_tasks_use_paired_bddls_and_standard_images(self):
+        targets_path = job.LANGGAP.parent / 'dataset/libero_goal_semantic_variants/multi_pick_place_targets.json'
+        raw = json.loads(targets_path.read_text())
+        targets = {key: entry for key, entry in raw.items() if not key.startswith('_')}
+        self.task_ids = tuple(entry['task_id'] for entry in targets.values())
+        self.names = {entry['task_id']: Path(entry['bddl_path']).name for entry in targets.values()}
+        self.load.return_value = (self.archive, self.scenes, self.names)
+        (self.root / 'targets.json').write_text(json.dumps(targets))
+        for task in self.task_ids:
+            (self.root / f'task{task}.hdf5').touch()
+        self.corrupt_pairing = False
+        with patch.object(job.subprocess, 'run', side_effect=self.fake_conversion) as run:
+            output = job.convert_run(self.root, 'test/standard', standard_libero=True)
+        command = run.call_args.args[0]
+        self.assertIn('--standard-libero', command)
+        for bddl in command[command.index('--bddl') + 1:command.index('--repo_id')]:
+            self.assertIn('paired_original_extended', bddl)
+        metadata = json.loads((output / 'meta/image_convention.json').read_text())
+        self.assertEqual(metadata['cameras'], ['image', 'wrist_image'])
 
     def test_same_episode_count_with_missing_configuration_is_rejected(self):
         self.corrupt_pairing = True

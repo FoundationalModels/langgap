@@ -1,4 +1,5 @@
 """Run with python -m unittest discover -s langgap/eval/tests."""
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -62,6 +63,22 @@ class MatchedScenesTest(unittest.TestCase):
         with h5py.File(self.path, 'a') as f:
             f['scenes/scene_000000/tasks/56/states'][0, 1] = 999
         with self.assertRaisesRegex(ValueError, 'training initial scene mismatch'):
+            load_matched_scenes(self.path, 1)
+
+    def test_declared_original_tasks_are_also_checked(self):
+        self.write_archive(1)
+        with h5py.File(self.path, 'a') as f:
+            f.attrs['task_ids'] = json.dumps([*MATCHED_GOAL_TASK_IDS, 12, 17])
+            tasks = f['scenes/scene_000000/tasks']
+            tasks.copy('54', tasks, name='12')
+            tasks.copy('54', tasks, name='17')
+            tasks['12'].attrs['bddl_file'] = 'bowl_cabinet.bddl'
+            tasks['17'].attrs['bddl_file'] = 'bowl_drawer.bddl'
+        _, _, names = load_matched_scenes(self.path, 1)
+        self.assertEqual(len(names), 11)
+        with h5py.File(self.path, 'a') as f:
+            f['scenes/scene_000000/tasks/12/states'][0, 1] = 999
+        with self.assertRaisesRegex(ValueError, 'task12: training initial scene mismatch'):
             load_matched_scenes(self.path, 1)
 
     def test_corrupt_snapshot_rejected(self):

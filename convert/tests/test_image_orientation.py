@@ -5,8 +5,10 @@ Run: python -m unittest discover -s langgap/convert/tests -v
 from pathlib import Path
 import sys
 import unittest
+import tempfile
+import h5py
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import numpy as np
 import torch
@@ -14,6 +16,7 @@ import torch
 LANGGAP = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(LANGGAP / 'convert'), str(LANGGAP / 'lerobot/src')]
 from source_to_lerobot import render_trajectory
+import source_to_lerobot as exporter
 from lerobot.processor.env_processor import LiberoProcessorStep
 from lerobot.policies.pi05.modeling_pi05 import PI05Policy
 
@@ -58,6 +61,32 @@ class ImageOrientationTest(unittest.TestCase):
                                    initial_scene=scene)
         self.assert_frames_match_eval(frames)
         env.reset.assert_not_called()
+
+    def test_standard_export_keeps_json_instruction_and_frame_values(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / 'task.hdf5'
+            with h5py.File(source, 'w') as file:
+                group = file.create_group('data')
+                group.attrs['instruction'] = 'Put the Bowl on the Cabinet'
+                demo = group.create_group('demo_1')
+                demo.create_dataset('states', data=np.zeros((2, 2)))
+                demo.create_dataset('actions', data=np.zeros((2, 7)))
+            env = Mock()
+            env.set_init_state.side_effect = [observation(i) for i in range(2)]
+            dataset = Mock()
+            with patch.object(exporter, 'create_env', return_value=env), patch.object(
+                exporter, 'get_instruction_from_bddl', return_value='Different BDDL Language'
+            ):
+                count = exporter.process_one_hdf5(source, 'task.bddl', dataset, standard_libero=True)
+            self.assertEqual(count, 1)
+            self.assertEqual(dataset.add_frame.call_count, 2)
+            for index, call in enumerate(dataset.add_frame.call_args_list):
+                frame = call.args[0]
+                self.assertEqual(set(frame), {'image', 'wrist_image', 'state', 'actions', 'task'})
+                self.assertEqual(frame['task'], 'put the bowl on the cabinet')
+                np.testing.assert_array_equal(frame['image'], observation(index)['agentview_image'][::-1, ::-1])
+                np.testing.assert_array_equal(frame['actions'], np.zeros(7, dtype=np.float32))
+            env.close.assert_called_once()
 
     def test_pi05_model_processing_does_not_flip_stored_images(self):
         # Exercise the actual model method without loading weights. Matching the

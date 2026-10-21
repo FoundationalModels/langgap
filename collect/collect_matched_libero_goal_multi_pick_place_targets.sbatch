@@ -16,7 +16,8 @@
 # Collector flags may follow the batch path, e.g. --episodes 5 --max-scenes 20.
 # Optional overrides: MATCHED_PROJECT_ROOT, MATCHED_OUTPUT_DIR, MATCHED_EPISODES,
 # MATCHED_MAX_SCENES, MATCHED_SEED, MATCHED_VERIFY_IMAGES, MUJOCO_GL.
-# This job only collects HDF5 data; it does not convert or upload another dataset.
+# Collects HDF5, exports standard LIBERO columns/images, and prepares OpenPI v2.1.
+# No dataset is uploaded.
 set -euo pipefail
 
 # Slurm runs a spool copy; locate the checkout from the submission directory.
@@ -46,6 +47,8 @@ export MKL_NUM_THREADS=1
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-4}"
 export PYTHONUNBUFFERED=1
 export TOKENIZERS_PARALLELISM=false
+export HF_HOME="${HF_HOME:-$matched_root/.cache/huggingface}"
+export HF_DATASETS_CACHE="${HF_DATASETS_CACHE:-$HF_HOME/datasets}"
 source "$matched_root/activate_env.sh" langgap
 
 matched_run="$(date -u +%Y%m%d_%H%M%S)_${SLURM_JOB_ID:-local_$$}"
@@ -207,6 +210,10 @@ def main():
         parser.error(f'Scene bank not found: {args.scene_bank}')
     if args.output_dir and args.output_dir.exists():
         parser.error('--output-dir must not already exist')
+
+    openpi_python = PROJECT_ROOT / '.venv-openpi/bin/python'
+    if not openpi_python.is_file():
+        parser.error('Standard LIBERO export requires .venv-openpi; run ./setup_env.sh openpi first')
 
     from libero.libero.envs import TASK_MAPPING
     from libero.libero.envs.bddl_utils import robosuite_parse_problem
@@ -371,6 +378,17 @@ def main():
                             '--frame_skip', '1', '--fps', '20',
                             '--output_dir', str(run_dir / 'videos' / f'task{task}')], check=True)
     print(f'Saved {args.episodes} matched scenes × {len(task_ids)} tasks in {run_dir}', flush=True)
+    subprocess.run([
+        sys.executable, str(LANGGAP / 'convert/convert_matched_libero_goal.py'),
+        '--run-dir', str(run_dir), '--repo-id', 'local/libero_goal_matched_150_multi_targets',
+        '--expected-scenes', str(args.episodes), '--standard-libero',
+    ], check=True)
+    subprocess.run([
+        str(openpi_python), str(PROJECT_ROOT / 'openpi/scripts/prepare_matched_libero.py'),
+        str(run_dir / 'lerobot'), '--output', str(run_dir / 'lerobot-openpi-v21'),
+        '--source-python', sys.executable, '--expected-scenes', str(args.episodes),
+    ], check=True)
+    print(f'Standard LIBERO training dataset: {run_dir / "lerobot-openpi-v21"}', flush=True)
     return 0
 
 
