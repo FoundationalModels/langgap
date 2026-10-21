@@ -1,0 +1,171 @@
+{
+  "scene_policy": "all four canonical movable objects start on the table; all four fixtures retained; source regions and initial placements restored",
+  "pair_differences": [
+    "language_instruction",
+    "goal_state"
+  ],
+  "pairs": {
+    "ext_02_wine_bottle_to_stove": {
+      "objects": [
+        "akita_black_bowl_1",
+        "cream_cheese_1",
+        "wine_bottle_1",
+        "plate_1"
+      ],
+      "commented_objects": [],
+      "fixture_spawn": null,
+      "paths": {
+        "extended": "langgap/data/bddl_files/libero_goal/paired_original_extended/ext_02_wine_bottle_to_stove/paired_ext_02_wine_bottle_to_stove.bddl",
+        "original": "langgap/data/bddl_files/libero_goal/paired_original_extended/ext_02_wine_bottle_to_stove/put_the_bowl_on_the_stove.bddl"
+      },
+      "entry_keys": {
+        "extended": "put_the_wine_bottle_on_the_stove",
+        "original": "put_the_bowl_on_the_stove__paired_with__ext_02_wine_bottle_to_stove"
+      }
+    },
+    "ext_03_cream_cheese_to_stove": {
+      "objects": [
+        "akita_black_bowl_1",
+        "cream_cheese_1",
+        "wine_bottle_1",
+        "plate_1"
+      ],
+      "commented_objects": [],
+      "fixture_spawn": null,
+      "paths": {
+        "extended": "langgap/data/bddl_files/libero_goal/paired_original_extended/ext_03_cream_cheese_to_stove/paired_ext_03_cream_cheese_to_stove.bddl",
+        "original": "langgap/data/bddl_files/libero_goal/paired_original_extended/ext_03_cream_cheese_to_stove/put_the_bowl_on_the_stove.bddl"
+      },
+      "entry_keys": {
+        "extended": "put_the_cream_cheese_on_the_stove",
+        "original": "put_the_bowl_on_the_stove__paired_with__ext_03_cream_cheese_to_stove"
+      }
+    },
+    "ext_05_cream_cheese_to_cabinet": {
+      "objects": [
+        "akita_black_bowl_1",
+        "cream_cheese_1",
+        "wine_bottle_1",
+        "plate_1"
+      ],
+      "commented_objects": [],
+      "fixture_spawn": null,
+      "paths": {
+        "extended": "langgap/data/bddl_files/libero_goal/paired_original_extended/ext_05_cream_cheese_to_cabinet/paired_ext_05_cream_cheese_to_cabinet.bddl",
+        "original": "langgap/data/bddl_files/libero_goal/paired_original_extended/ext_05_cream_cheese_to_cabinet/put_the_bowl_on_top_of_the_cabinet.bddl"
+      },
+      "entry_keys": {
+        "extended": "put_the_cream_cheese_on_top_of_the_cabinet",
+        "original": "put_the_bowl_on_top_of_the_cabinet__paired_with__ext_05_cream_cheese_to_cabinet"
+      }
+    },
+    "ext_06_wine_bottle_to_plate": {
+      "objects": [
+        "akita_black_bowl_1",
+        "cream_cheese_1",
+        "wine_bottle_1",
+        "plate_1"
+      ],
+      "commented_objects": [],
+      "fixture_spawn": null,
+      "paths": {
+        "extended": "langgap/data/bddl_files/libero_goal/paired_original_extended/ext_06_wine_bottle_to_plate/paired_ext_06_wine_bottle_to_plate.bddl",
+        "original": "langgap/data/bddl_files/libero_goal/paired_original_extended/ext_06_wine_bottle_to_plate/put_the_bowl_on_the_plate.bddl"
+      },
+      "entry_keys": {
+        "extended": "put_the_wine_bottle_on_the_plate",
+        "original": "put_the_bowl_on_the_plate__paired_with__ext_06_wine_bottle_to_plate"
+      }
+    },
+    "ext_07_cream_cheese_to_plate": {
+      "objects": [
+        "akita_black_bowl_1",
+        "cream_cheese_1",
+        "wine_bottle_1",
+        "plate_1"
+      ],
+      "commented_objects": [],
+      "fixture_spawn": null,
+      "paths": {
+        "extended": "langgap/data/bddl_files/libero_goal/paired_original_extended/ext_07_cream_cheese_to_plate/paired_ext_07_cream_cheese_to_plate.bddl",
+        "original": "langgap/data/bddl_files/libero_goal/paired_original_extended/ext_07_cream_cheese_to_plate/put_the_bowl_on_the_plate.bddl"
+      },
+      "entry_keys": {
+        "extended": "put_the_cream_cheese_on_the_plate",
+        "original": "put_the_bowl_on_the_plate__paired_with__ext_07_cream_cheese_to_plate"
+      }
+    },
+    "ext_09_cream_cheese_to_top_drawer": {
+      "objects": [
+        "akita_black_bowl_1",
+        "cream_cheese_1",
+        "wine_bottle_1",
+        "plate_1"
+      ],
+      "commented_objects": [],
+      "fixture_spawn": null,
+      "paths": {
+        "extended": "langgap/data/bddl_files/libero_goal/paired_original_extended/ext_09_cream_cheese_to_top_drawer/paired_ext_09_cream_cheese_to_top_drawer.bddl",
+        "original": "langgap/data/bddl_files/libero_goal/paired_original_extended/ext_09_cream_cheese_to_top_drawer/open_the_top_drawer_and_put_the_bowl_inside.bddl"
+      },
+      "entry_keys": {
+        "extended": "open_the_top_drawer_and_put_the_cream_cheese_inside",
+        "original": "open_the_top_drawer_and_put_the_bowl_inside__paired_with__ext_09_cream_cheese_to_top_drawer"
+      }
+    },
+    "ext_11_bottom_drawer": {
+      "objects": [
+        "akita_black_bowl_1",
+        "cream_cheese_1",
+        "wine_bottle_1",
+        "plate_1"
+      ],
+      "commented_objects": [],
+      "fixture_spawn": null,
+      "paths": {
+        "extended": "langgap/data/bddl_files/libero_goal/paired_original_extended/ext_11_bottom_drawer/paired_ext_11_bottom_drawer.bddl",
+        "original": "langgap/data/bddl_files/libero_goal/paired_original_extended/ext_11_bottom_drawer/open_the_middle_drawer_of_the_cabinet.bddl"
+      },
+      "entry_keys": {
+        "extended": "open_the_bottom_drawer_of_the_cabinet",
+        "original": "open_the_middle_drawer_of_the_cabinet__paired_with__ext_11_bottom_drawer"
+      }
+    },
+    "ext_12_bowl_to_stove_front": {
+      "objects": [
+        "akita_black_bowl_1",
+        "cream_cheese_1",
+        "wine_bottle_1",
+        "plate_1"
+      ],
+      "commented_objects": [],
+      "fixture_spawn": null,
+      "paths": {
+        "extended": "langgap/data/bddl_files/libero_goal/paired_original_extended/ext_12_bowl_to_stove_front/paired_ext_12_bowl_to_stove_front.bddl",
+        "original": "langgap/data/bddl_files/libero_goal/paired_original_extended/ext_12_bowl_to_stove_front/push_the_plate_to_the_front_of_the_stove.bddl"
+      },
+      "entry_keys": {
+        "extended": "put_the_bowl_in_front_of_the_stove",
+        "original": "push_the_plate_to_the_front_of_the_stove__paired_with__ext_12_bowl_to_stove_front"
+      }
+    },
+    "put_the_wine_bottle_in_front_of_the_stove": {
+      "objects": [
+        "akita_black_bowl_1",
+        "cream_cheese_1",
+        "wine_bottle_1",
+        "plate_1"
+      ],
+      "commented_objects": [],
+      "fixture_spawn": null,
+      "paths": {
+        "extended": "langgap/data/bddl_files/libero_goal/paired_original_extended/put_the_wine_bottle_in_front_of_the_stove/paired_ext_put_the_wine_bottle_in_front_of_the_stove.bddl",
+        "original": "langgap/data/bddl_files/libero_goal/paired_original_extended/put_the_wine_bottle_in_front_of_the_stove/put_the_wine_bottle_on_the_rack.bddl"
+      },
+      "entry_keys": {
+        "extended": "put_the_wine_bottle_in_front_of_the_stove",
+        "original": "put_the_wine_bottle_on_the_rack__paired_with__put_the_wine_bottle_in_front_of_the_stove"
+      }
+    }
+  }
+}

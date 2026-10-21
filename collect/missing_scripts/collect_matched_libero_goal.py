@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect complete nine-task bundles from identical settled LIBERO goal scenes."""
+"""Collect extended and optional original Goal tasks from identical settled scenes."""
 import argparse
 from datetime import datetime
 import hashlib
@@ -9,6 +9,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 
 import h5py
 import numpy as np
@@ -20,9 +21,25 @@ sys.path.insert(0, str(LANGGAP))
 from task_registry import EXTENDED_TASK_MAP
 
 TASK_IDS = (54, 55, 56, 57, 77, 78, 79, 80, 81)
+ORIGINAL_TASKS = {
+    10: 'put_the_bowl_on_the_plate',
+    11: 'put_the_bowl_on_the_stove',
+    12: 'put_the_bowl_on_top_of_the_cabinet',
+    14: 'put_the_wine_bottle_on_the_rack',
+    17: 'open_the_top_drawer_and_put_the_bowl_inside',
+    18: 'open_the_middle_drawer_of_the_cabinet',
+    19: 'push_the_plate_to_the_front_of_the_stove',
+}
+# Extended ID -> representative paired original ID from the BDDL mapping.
+ORIGINAL_PAIRS = {54: 11, 55: 10, 56: 17, 57: 18, 77: 11,
+                  78: 12, 79: 10, 80: 19, 81: 14}
 
 
 def task_paths(task_id):
+    if task_id in ORIGINAL_TASKS:
+        relative = Path('libero_goal/original') / ORIGINAL_TASKS[task_id]
+        return (LANGGAP / 'data/bddl_files' / relative.with_suffix('.bddl'),
+                LANGGAP / 'data/init_files' / relative.with_suffix('.pruned_init'))
     task = EXTENDED_TASK_MAP[task_id]
     relative = Path(task['suite']) / 'extended' / task['dim'] / task['bddl']
     return (LANGGAP / 'data/bddl_files' / relative.with_suffix('.bddl'),
@@ -30,6 +47,19 @@ def task_paths(task_id):
 
 
 def load_collector(task_id):
+    if task_id in ORIGINAL_TASKS:
+        path = LANGGAP / 'collect/scripted_original/libero_goal/policies.py'
+        spec = importlib.util.spec_from_file_location('matched_original_policies', path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        task_name = ORIGINAL_TASKS[task_id]
+        def collect(env, max_steps, debug=False, initialize_scene=None):
+            return module.collect_one_demo(env, task_name, max_steps, debug, initialize_scene)
+        return SimpleNamespace(
+            discover_names=lambda env, debug=False: (), collect_one_demo=collect,
+            save_hdf5=module.pose.save_hdf5,
+            get_instruction_from_bddl=module.pose.get_instruction_from_bddl,
+            EXPECTED_MAX_STEPS=700)
     script = Path(__file__).parent / f'scripted_collect_task{task_id}.py'
     if not script.exists():
         script = LANGGAP / 'collect' / script.name
@@ -64,7 +94,7 @@ def sample_scene(env, init_states, index, seed, verify_images):
                                  init_index, verify_images)
 
 
-def export_task_files(run_dir, archive, modules, bddls, instructions):
+def export_task_files(run_dir, archive, modules, bddls, instructions, task_ids=TASK_IDS):
     scenes = [archive['scenes'][key] for key in sorted(archive['scenes'])
               if archive['scenes'][key].attrs.get('complete', False)]
     if not scenes:
@@ -72,7 +102,7 @@ def export_task_files(run_dir, archive, modules, bddls, instructions):
     poses = [(group['initial_scene/model_body_pos'][:],
               group['initial_scene/model_body_quat'][:]) for group in scenes]
     body_names = json.loads(scenes[0]['initial_scene'].attrs['layout'])['names']['body']
-    for task_id in TASK_IDS:
+    for task_id in task_ids:
         demos = [(group[f'tasks/{task_id}/states'][:],
                   group[f'tasks/{task_id}/actions'][:]) for group in scenes]
         output = run_dir / f'task{task_id}.hdf5'
@@ -84,11 +114,17 @@ def export_task_files(run_dir, archive, modules, bddls, instructions):
                                   instructions[task_id], model_poses=poses,
                                   model_body_names=body_names)
         with h5py.File(temporary, 'a') as file:
-            file['data'].attrs['matched_task_ids'] = json.dumps(TASK_IDS)
+            file['data'].attrs['matched_task_ids'] = json.dumps(task_ids)
             file['data'].attrs['matched_archive'] = str(run_dir / 'matched_demos.hdf5')
+            pairs = {str(k): v for k, v in ORIGINAL_PAIRS.items()
+                     if k in task_ids and v in task_ids}
+            file['data'].attrs['original_pairs'] = json.dumps(pairs)
+            file['data'].attrs['task_id'] = task_id
+            file['data'].attrs['task_role'] = 'original' if task_id in ORIGINAL_TASKS else 'extended'
             for i, group in enumerate(scenes, 1):
                 episode = file[f'data/demo_{i}']
                 initial = group['initial_scene']
+                group.copy('initial_scene', episode)
                 for key in ('scene_id', 'scene_hash'):
                     episode.attrs[key] = initial.attrs[key]
                 if 'initial_image' in initial:
@@ -99,8 +135,10 @@ def export_task_files(run_dir, archive, modules, bddls, instructions):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--include-originals', action='store_true',
+                        help='Match all seven paired originals as well (16 demos per scene)')
     parser.add_argument('--episodes', type=int, default=1,
-                        help='Complete matched scenes requested (each produces nine demos)')
+                        help='Complete matched scenes requested (nine extended, optionally seven original demos each)')
     parser.add_argument('--max-scenes', type=int, default=None,
                         help='Candidate scenes allowed (default: 4 * episodes)')
     parser.add_argument('--seed', type=int, default=0,
@@ -119,6 +157,7 @@ def main():
                         help='Render action replay videos for every exported demo')
     parser.add_argument('--debug', action='store_true')
     args = parser.parse_args()
+    task_ids = TASK_IDS + tuple(ORIGINAL_TASKS) if args.include_originals else TASK_IDS
     if args.episodes <= 0 or (args.max_scenes is not None and args.max_scenes <= 0):
         parser.error('--episodes and --max-scenes must be positive')
     if args.max_scenes is not None and args.max_scenes < args.episodes:
@@ -136,15 +175,15 @@ def main():
     from libero.libero.envs.bddl_utils import robosuite_parse_problem
     from robosuite import load_controller_config
 
-    bddls = {task: task_paths(task)[0] for task in TASK_IDS}
+    bddls = {task: task_paths(task)[0] for task in task_ids}
     parsed = {task: robosuite_parse_problem(str(path)) for task, path in bddls.items()}
     canonical_definition = physical_definition(parsed[54])
-    for task in TASK_IDS:
+    for task in task_ids:
         if physical_definition(parsed[task]) != canonical_definition:
             raise ValueError(f'Task {task} no longer has the canonical physical scene')
-    modules = {task: load_collector(task) for task in TASK_IDS}
+    modules = {task: load_collector(task) for task in task_ids}
     instructions = {task: modules[task].get_instruction_from_bddl(str(bddls[task]))
-                    for task in TASK_IDS}
+                    for task in task_ids}
     init_path = args.init_file or task_paths(54)[1]
     init_states = None
     if not args.scene_bank and not args.random_init:
@@ -164,10 +203,11 @@ def main():
         run_dir = Path(tempfile.mkdtemp(prefix=datetime.now().strftime('%Y%m%d_%H%M%S_'), dir=parent))
     print(f'Run directory: {run_dir}', flush=True)
     bank_path = args.scene_bank.resolve() if args.scene_bank else run_dir / 'scene_bank.hdf5'
-    manifest = {'schema_version': 1, 'status': 'running', 'task_ids': list(TASK_IDS),
+    manifest = {'schema_version': 1, 'status': 'running', 'task_ids': list(task_ids),
                 'scene_bank': str(bank_path), 'seed': args.seed,
                 'verify_images': not args.no_verify_images, 'requested_scenes': args.episodes,
                 'accepted': [], 'rejected': [],
+                'original_pairs': {str(k): v for k, v in ORIGINAL_PAIRS.items()} if args.include_originals else {},
                 'bddls': {str(task): str(path) for task, path in bddls.items()}}
     manifest_path = run_dir / 'manifest.json'
     write_manifest(manifest_path, manifest)
@@ -188,9 +228,10 @@ def main():
             bank.create_group('scenes')
             keys = None
         archive = h5py.File(run_dir / 'matched_demos.hdf5', 'x')
-        archive.attrs.update(schema_version=1, task_ids=json.dumps(TASK_IDS), scene_bank=str(bank_path))
+        archive.attrs.update(schema_version=1, task_ids=json.dumps(task_ids), scene_bank=str(bank_path))
+        archive.attrs['original_pairs'] = json.dumps(manifest['original_pairs'])
         archive.create_group('scenes')
-        for task in TASK_IDS:
+        for task in task_ids:
             environments[task] = TASK_MAPPING[parsed[task]['problem_name']](
                 bddl_file_name=str(bddls[task]), robots=['Panda'],
                 controller_configs=[load_controller_config(default_controller='OSC_POSE')],
@@ -212,7 +253,7 @@ def main():
             print(f'Candidate {scene.scene_id} ({scene.scene_hash[:12]})', flush=True)
             bundle = {}
             failed = None
-            for task in TASK_IDS:
+            for task in task_ids:
                 env = environments[task]
                 def initialize(target_env):
                     return scene.restore(target_env, verify_images=not args.no_verify_images)
@@ -220,7 +261,8 @@ def main():
                 scene.restore(env, verify_images=False)
                 names = modules[task].discover_names(env, debug=False)
                 states, actions, success = modules[task].collect_one_demo(
-                    env, *names, max_steps=500, debug=args.debug, initialize_scene=initialize)
+                    env, *names, max_steps=700 if task in ORIGINAL_TASKS else 500,
+                    debug=args.debug, initialize_scene=initialize)
                 if not states or not np.array_equal(states[0], scene.arrays['state']):
                     raise AssertionError(f'Task {task}: first recorded state differs from scene bank')
                 actions = np.asarray(actions)
@@ -254,7 +296,7 @@ def main():
             write_manifest(manifest_path, manifest)
             if len(manifest['accepted']) >= args.episodes:
                 break
-        export_task_files(run_dir, archive, modules, bddls, instructions)
+        export_task_files(run_dir, archive, modules, bddls, instructions, task_ids)
         manifest['status'] = 'complete' if len(manifest['accepted']) == args.episodes else 'partial'
         write_manifest(manifest_path, manifest)
     except BaseException as error:
@@ -273,13 +315,13 @@ def main():
         print(f'Only {len(manifest["accepted"])}/{args.episodes} complete scene bundles; see manifest.json', file=sys.stderr)
         return 1
     if args.videos:
-        for task in TASK_IDS:
+        for task in task_ids:
             subprocess.run([sys.executable, str(LANGGAP / 'process/replay_dataset.py'),
                             '--dataset', str(run_dir / f'task{task}.hdf5'),
                             '--bddl', str(bddls[task]), '--episodes', str(args.episodes),
                             '--frame_skip', '1', '--fps', '20',
                             '--output_dir', str(run_dir / 'videos' / f'task{task}')], check=True)
-    print(f'Saved {args.episodes} matched scenes × {len(TASK_IDS)} tasks in {run_dir}', flush=True)
+    print(f'Saved {args.episodes} matched scenes × {len(task_ids)} tasks in {run_dir}', flush=True)
     return 0
 
 

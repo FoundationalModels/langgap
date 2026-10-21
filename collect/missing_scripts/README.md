@@ -4,6 +4,13 @@ Run these commands from the repository root.
 
 ## Matched collection: identical starts across all nine goal tasks
 
+To include the seven paired originals from the same snapshots, add
+`--include-originals` or use
+[`scripted_original/libero_goal/collect_matched.sh`](../scripted_original/libero_goal/collect_matched.sh).
+This accepts complete 16-task bundles. See the
+[original collector documentation](../scripted_original/README.md#matched-original-and-extended-collection)
+for reuse of existing scene banks and export details.
+
 ```bash
 ./langgap/collect/missing_scripts/collect_matched_libero_goal.sh --episodes 5
 ```

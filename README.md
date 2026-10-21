@@ -162,6 +162,10 @@ export MUJOCO_GL=egl
 
 ### Scripted Policy Collection
 
+For the seven original LIBERO Goal tasks used in the paired BDDL folders, see
+[`collect/scripted_original/README.md`](collect/scripted_original/README.md).
+It documents the official demos' provenance and provides individual scripted collectors.
+
 To collect scripted demonstrations and save replay videos, run from the repository root:
 
 ```bash
@@ -173,6 +177,34 @@ To collect scripted demonstrations and save replay videos, run from the reposito
 # Matched starts: 5 shared scenes, with all nine tasks per scene
 ./langgap/collect/missing_scripts/collect_matched_libero_goal.sh --episodes 5
 ```
+
+For the exact task list in
+`dataset/libero_goal_semantic_variants/multi_pick_place_targets.json`, use:
+
+```bash
+sbatch langgap/collect/collect_matched_libero_goal_multi_pick_place_targets.sbatch \
+  --episodes 150 --max-scenes 600 --output-dir /path/to/new/run
+```
+
+This reads each listed task's paired BDDL path (currently 11 tasks, including
+original bowl tasks 12 and 17). Every accepted scene has one successful demo for
+every listed task. Before each rollout, it restores and verifies the same settled
+MuJoCo state, fixture poses, physics inputs, and gripper state. Strict image
+verification also checks the initial camera image. A failed task rejects the whole
+scene. `--episodes` counts shared scenes,
+so the default 150 scenes produce 1,650 demonstrations. The job uses GPU EGL rendering
+and disables strict pixel checks by default; set `MATCHED_VERIFY_IMAGES=1` to enable
+them. Exact physical state checks always run. The default uses task 54's
+init bank; `--random-init` samples the common BDDL scene instead.
+
+Outputs include `scene_bank.hdf5`, `matched_demos.hdf5`, `task<ID>.hdf5`,
+`manifest.json`, and a resolved `targets.json`. Instructions are lowercased.
+The JSON base commands and both pick/place variant groups are preserved as metadata; variants reuse the same
+physical behavior rather than triggering additional rollouts. Use `--scene-bank
+/path/to/scene_bank.hdf5` to reuse existing configurations, `--videos` for replay
+videos, or `--no-verify-images` to skip pixel checks while retaining exact physical
+state checks. The output directory must be new. Exit status is nonzero if too few
+complete scenes succeed; completed bundles are still exported.
 
 Runs are saved under `langgap/data/scripted_runs/`. See
 [`collect/missing_scripts/README.md`](collect/missing_scripts/README.md) for the full task list, options, and direct collector usage.
